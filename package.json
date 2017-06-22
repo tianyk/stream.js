@@ -1,0 +1,25 @@
+{
+  "dependencies": {
+    "fs-extra": "^3.0.1",
+    "is-type-of": "^1.0.0",
+    "readable-stream": "^2.3.1"
+  },
+  "name": "stream.js",
+  "version": "1.0.0",
+  "main": "index.js",
+  "devDependencies": {},
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "tyk",
+  "license": "ISC",
+  "description": "simple cdn",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/tianyk/stream.js.git"
+  },
+  "bugs": {
+    "url": "https://github.com/tianyk/stream.js/issues"
+  },
+  "homepage": "https://github.com/tianyk/stream.js"
+}
