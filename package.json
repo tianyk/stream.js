@@ -1,5 +1,6 @@
 {
   "dependencies": {
+    "agentkeepalive": "^3.3.0",
     "fs-extra": "^3.0.1",
     "is-type-of": "^1.0.0",
     "readable-stream": "^2.3.1"

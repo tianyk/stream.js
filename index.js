@@ -7,10 +7,21 @@ const http = require('http');
 const https = require('https');
 const url = require('url');
 const is = require('is-type-of');
+const Agent = require('agentkeepalive');
+
 const Readable = stream.Readable;
 const Writable = stream.Writable;
 const Duplex = stream.Duplex;
 const Transform = stream.Transform;
+
+const agentOptions = {
+    maxSockets: 100,
+    maxFreeSockets: 10,
+    timeout: 60000,
+    freeSocketKeepAliveTimeout: 30000
+};
+const httpKeepaliveAgent = new Agent(agentOptions);
+const httpsKeepaliveAgent = new Agent.HttpsAgent(agentOptions);
 
 function MyWritable(options) {
     if (!(this instanceof MyWritable))
@@ -125,21 +136,21 @@ HtmlTransform.prototype._transform = function (chunk, encoding, callback) {
 }
 
 function createCDNReadStream(uri, cb) {
-    let urlHash = md5(uri);
-    let protocol;
+    let htmlFilePath = path.join(__dirname, md5(uri));
+
     try {
-        protocol = url.parse(uri).protocol;
+        uri = url.parse(uri);
     } catch (e) {
         return cb(e);
     }
-
-    fs.open(path.join(__dirname, urlHash), 'r', (err) => {
+    fs.open(htmlFilePath, 'r', (err) => {
         if (err) {
             if (err.code === 'ENOENT') {
-                let request = (protocol === 'http:') ? http : https;
+                let request = (uri.protocol === 'http:') ? http : https;
+                uri.agent = (uri.protocol === 'http:') ? httpKeepaliveAgent : httpsKeepaliveAgent;
 
                 let req = request.get(uri, (message) => {
-                    let responseWriteStream = fs.createWriteStream(path.join(__dirname, urlHash));
+                    let responseWriteStream = fs.createWriteStream(htmlFilePath);
                     responseWriteStream.write(`HTTP/${message.httpVersion} ${message.statusCode} ${message.statusMessage}\r\n`);
                     for (let header in message.headers)
                         responseWriteStream.write(`${header}: ${message.headers[header]}\r\n`);
@@ -155,7 +166,7 @@ function createCDNReadStream(uri, cb) {
                 cb(err);
             }
         } else {
-            cb(null, fs.createReadStream(path.join(__dirname, urlHash)).pipe(new HtmlTransform()));
+            cb(null, fs.createReadStream(htmlFilePath).pipe(new HtmlTransform()));
         }
     });
 }
@@ -163,9 +174,9 @@ function createCDNReadStream(uri, cb) {
 // cat 76ced47a8c74747924990e7ec50124e4_header | nc -l 8080
 // visit: http://localhost:8080
 
-let uri = 'http://www.baidu.com';
+let uri = 'https://www.baidu.com';
 uri = 'http://127.0.0.1:8080/P60524-122812.jpg';
-// uri = `${url}?_=${Date.now()}`;
+// uri = `${uri}?_=${Date.now()}`;
 createCDNReadStream(uri, (err, readStream) => {
     if (err) throw err;
     readStream.pipe(process.stdout);
