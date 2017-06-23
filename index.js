@@ -4,6 +4,8 @@ const fs = require('fs-extra');
 const path = require('path');
 const crypto = require('crypto');
 const http = require('http');
+const https = require('https');
+const url = require('url');
 const is = require('is-type-of');
 const Readable = stream.Readable;
 const Writable = stream.Writable;
@@ -92,7 +94,7 @@ function CDNTransform(stream, options) {
 
     if (is.writableStream(stream))
         this.writeStream = stream;
-    else 
+    else
         this.writeStream = fs.createWriteStream(stream);
 }
 util.inherits(CDNTransform, Transform);
@@ -102,22 +104,48 @@ CDNTransform.prototype._transform = function (chunk, encoding, callback) {
     callback(null, chunk);
 }
 
-function createCDNReadStream(url, cb) {
-    let urlHash = md5(url);
+function HtmlTransform(options) {
+    if (!(this instanceof HtmlTransform))
+        return new HtmlTransform(options);
+    Transform.call(this, options);
+    this.skip = false;
+}
+util.inherits(HtmlTransform, Transform);
 
-    fs.open(path.join(__dirname, urlHash), 'r', (err, fd) => {
+HtmlTransform.prototype._transform = function (chunk, encoding, callback) {
+    if (!this.skip) {
+        let pos = chunk.indexOf('\r\n\r\n');
+        if (-1 !== pos) {
+            chunk = chunk.slice(pos + 4);
+            this.skip = true;
+        }
+    }
+
+    callback(null, chunk);
+}
+
+function createCDNReadStream(uri, cb) {
+    let urlHash = md5(uri);
+    let protocol;
+    try {
+        protocol = url.parse(uri).protocol;
+    } catch (e) {
+        return cb(e);
+    }
+
+    fs.open(path.join(__dirname, urlHash), 'r', (err) => {
         if (err) {
             if (err.code === 'ENOENT') {
-                let req = http.get(url, (message) => {
-                    let headWriteStream = fs.createWriteStream(path.join(__dirname, `${urlHash}_header`));
-                    headWriteStream.write(`HTTP/${message.httpVersion} ${message.statusCode} ${message.statusMessage}\r\n`);
-                    for (let header in message.headers) 
-                        headWriteStream.write(`${header}: ${message.headers[header]}\r\n`);
-                    // headWriteStream.end('\r\n');
-                    headWriteStream.write('\r\n');
+                let request = (protocol === 'http:') ? http : https;
 
-                    // cb(null, message.pipe(new CDNTransform(path.join(__dirname, `${urlHash}_body`))));
-                    cb(null, message.pipe(new CDNTransform(headWriteStream)));
+                let req = request.get(uri, (message) => {
+                    let responseWriteStream = fs.createWriteStream(path.join(__dirname, urlHash));
+                    responseWriteStream.write(`HTTP/${message.httpVersion} ${message.statusCode} ${message.statusMessage}\r\n`);
+                    for (let header in message.headers)
+                        responseWriteStream.write(`${header}: ${message.headers[header]}\r\n`);
+                    responseWriteStream.write('\r\n');
+
+                    cb(null, message.pipe(new CDNTransform(responseWriteStream)));
                 });
 
                 req.on('error', (err) => {
@@ -127,14 +155,18 @@ function createCDNReadStream(url, cb) {
                 cb(err);
             }
         } else {
-            cb(null, fs.createReadStream(path.join(__dirname, urlHash)));
+            cb(null, fs.createReadStream(path.join(__dirname, urlHash)).pipe(new HtmlTransform()));
         }
     });
 }
 
 // cat 76ced47a8c74747924990e7ec50124e4_header | nc -l 8080
 // visit: http://localhost:8080
-createCDNReadStream(`http://www.baidu.com?_=${Date.now()}`, (err, readStream) => {
+
+let uri = 'http://www.baidu.com';
+uri = 'http://127.0.0.1:8080/P60524-122812.jpg';
+// uri = `${url}?_=${Date.now()}`;
+createCDNReadStream(uri, (err, readStream) => {
     if (err) throw err;
     readStream.pipe(process.stdout);
-})
+});
