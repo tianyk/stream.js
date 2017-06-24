@@ -1,13 +1,16 @@
-const stream = require('stream');
-const util = require('util');
-const fs = require('fs-extra');
-const path = require('path');
+const Agent = require('agentkeepalive');
 const crypto = require('crypto');
+const fs = require('fs-extra');
 const http = require('http');
 const https = require('https');
-const url = require('url');
 const is = require('is-type-of');
-const Agent = require('agentkeepalive');
+const _ = require('lodash');
+const mkdirp = require('mkdirp');
+const path = require('path');
+const stream = require('stream');
+const url = require('url');
+const util = require('util');
+const dns = require('./dns');
 
 const Readable = stream.Readable;
 const Writable = stream.Writable;
@@ -22,6 +25,22 @@ const agentOptions = {
 };
 const httpKeepaliveAgent = new Agent(agentOptions);
 const httpsKeepaliveAgent = new Agent.HttpsAgent(agentOptions);
+
+const DEFAULT_HEADS = {
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+    // 'Accept-Encoding': 'gzip, deflate, sdch',
+    'Accept-Language': 'zh-CN,zh;q=0.8',
+    'Cache-Control': 'no-cache',
+    'Connection': 'keep-alive',
+    'Host': 'www.ruanyifeng.com',
+    'Pragma': 'no-cache',
+    'Referer': 'https://www.google.com.hk/',
+    'Upgrade-Insecure-Requests': '1',
+    'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_12_5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.36'
+}
+
+const CHACHE_DIR = path.join(__dirname, '.tmp');
+mkdirp.sync(CHACHE_DIR);
 
 function MyWritable(options) {
     if (!(this instanceof MyWritable))
@@ -111,8 +130,13 @@ function CDNTransform(stream, options) {
 util.inherits(CDNTransform, Transform);
 
 CDNTransform.prototype._transform = function (chunk, encoding, callback) {
-    this.writeStream.write(chunk, encoding);
-    callback(null, chunk);
+    let write = this.writeStream;
+    let ok = write.write(chunk, encoding);
+    if (ok) return callback(null, chunk);
+
+    write.once('drain', function () {
+        callback(null, chunk);
+    });
 }
 
 function HtmlTransform(options) {
@@ -136,7 +160,7 @@ HtmlTransform.prototype._transform = function (chunk, encoding, callback) {
 }
 
 function createCDNReadStream(uri, cb) {
-    let htmlFilePath = path.join(__dirname, md5(uri));
+    let htmlFilePath = path.join(CHACHE_DIR, md5(uri));
 
     try {
         uri = url.parse(uri);
@@ -144,29 +168,29 @@ function createCDNReadStream(uri, cb) {
         return cb(e);
     }
     fs.open(htmlFilePath, 'r', (err) => {
-        if (err) {
-            if (err.code === 'ENOENT') {
-                let request = (uri.protocol === 'http:') ? http : https;
-                uri.agent = (uri.protocol === 'http:') ? httpKeepaliveAgent : httpsKeepaliveAgent;
+        if (!err) return cb(null, fs.createReadStream(htmlFilePath).pipe(new HtmlTransform()));
 
-                let req = request.get(uri, (message) => {
-                    let responseWriteStream = fs.createWriteStream(htmlFilePath);
-                    responseWriteStream.write(`HTTP/${message.httpVersion} ${message.statusCode} ${message.statusMessage}\r\n`);
-                    for (let header in message.headers)
-                        responseWriteStream.write(`${header}: ${message.headers[header]}\r\n`);
-                    responseWriteStream.write('\r\n');
+        if (err.code === 'ENOENT') {
+            let request = (uri.protocol === 'http:') ? http : https;
+            uri.agent = (uri.protocol === 'http:') ? httpKeepaliveAgent : httpsKeepaliveAgent;
+            uri.lookup = dns.lookup.bind(dns);
+            uri.headers = _.merge(DEFAULT_HEADS, { host: uri.host })
 
-                    cb(null, message.pipe(new CDNTransform(responseWriteStream)));
-                });
+            let req = request.get(uri, (message) => {
+                let responseWriteStream = fs.createWriteStream(htmlFilePath);
+                responseWriteStream.write(`HTTP/${message.httpVersion} ${message.statusCode} ${message.statusMessage}\r\n`);
+                for (let header in message.headers)
+                    responseWriteStream.write(`${header}: ${message.headers[header]}\r\n`);
+                responseWriteStream.write('\r\n');
 
-                req.on('error', (err) => {
-                    cb(err);
-                });
-            } else {
+                cb(null, message.pipe(new CDNTransform(responseWriteStream)));
+            });
+
+            req.on('error', (err) => {
                 cb(err);
-            }
+            });
         } else {
-            cb(null, fs.createReadStream(htmlFilePath).pipe(new HtmlTransform()));
+            cb(err);
         }
     });
 }
@@ -175,7 +199,7 @@ function createCDNReadStream(uri, cb) {
 // visit: http://localhost:8080
 
 let uri = 'https://www.baidu.com';
-uri = 'http://127.0.0.1:8080/P60524-122812.jpg';
+// uri = 'http://preview.quanjing.com/pm0128/pm0128-1005ku.jpg';
 // uri = `${uri}?_=${Date.now()}`;
 createCDNReadStream(uri, (err, readStream) => {
     if (err) throw err;
